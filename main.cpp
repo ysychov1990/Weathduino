@@ -19,12 +19,6 @@ using chrono_minutes =
 using chrono_date =
     std::chrono::time_point<std::chrono::system_clock, std::chrono::days>;
 
-// Callback for CURL to write received data into a string
-size_t curlHook(char *data, size_t size, size_t nmemb, std::ostringstream *s) {
-  s->write(data, size * nmemb);
-  return size * nmemb;
-}
-
 inline chrono_minutes str2minutes(const std::string &s) {
   std::istringstream iss{s};
   chrono_minutes cm;
@@ -41,33 +35,6 @@ inline std::string minutes2str(const chrono_minutes &cm) {
 }
 inline std::string date2str(const chrono_date &cd) {
   return std::format(std::locale("C"), "%Y-%m-%d", cd);
-}
-
-// convert date/time string to std::tm
-inline std::tm str2tm(std::string s) {
-  std::tm tt{};
-  std::istringstream iss{s};
-  iss.imbue(std::locale("C"));
-  iss >> std::get_time(&tt, "%Y-%m-%dT%H:%M");
-  if (iss.fail()) {
-    std::cerr << "Error while parsing date!\n";
-    throw std::runtime_error("faulty date/time parsing!");
-  }
-  return tt;
-}
-// convert std::tm to date string
-inline std::string tm2dateStr(std::tm tt) {
-  std::ostringstream oss{};
-  oss.imbue(std::locale("C"));
-  oss << std::put_time(&tt, "%Y-%m-%d");
-  return oss.str();
-}
-// convert std::tm to date/time string
-inline std::string tm2datetimeStr(std::tm tt) {
-  std::ostringstream oss{};
-  oss.imbue(std::locale("C"));
-  oss << std::put_time(&tt, "%Y-%m-%d %H:%M");
-  return oss.str();
 }
 
 class Weather {
@@ -119,7 +86,13 @@ int main() {
 
     std::ostringstream osresponse{};
     curl_easy_setopt(curl, CURLOPT_URL, ossurl.str().c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlHook);
+    // lambda callback for CURL to write received data into a stringstream
+    curl_easy_setopt(
+        curl, CURLOPT_WRITEFUNCTION,
+        +[](char *d, size_t s, size_t n, std::ostringstream *oss) -> size_t {
+          oss->write(d, s * n);
+          return s * n;
+        });
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &osresponse);
     int perform_curl = curl_easy_perform(curl);
     curl_easy_cleanup(curl);
