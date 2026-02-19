@@ -1,0 +1,11 @@
+# ignore ctags cache files
+.cache/
+# ignore builds
+build-Debug/
+build-Release/
+# ignore codelite tags
+.codelite/
+# Makefiles, etc
+Makefile
+Weathduino.mk
+compile_commands.json
