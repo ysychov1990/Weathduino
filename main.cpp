@@ -1,18 +1,15 @@
-// #include <chrono>
 #include <curl/curl.h>
 #include <fcntl.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <termios.h>
-// #include <thread>
-// #include <format>
 #include <chrono>
 #include <ctime>
-#include <exception>
 #include <unistd.h>
 
 using json = nlohmann::json;
+
 // shortcut to use std::chrono, minutes
 using chrono_minutes =
     std::chrono::time_point<std::chrono::system_clock, std::chrono::minutes>;
@@ -108,9 +105,8 @@ int main() {
   // this is current weather
   Weather nowWeather;
   chrono_minutes nowTime;
-  // std::tm nowTime;
   // this is our forecast
-  //  map of std::chrono dates --> (map of hour --> weather)
+  //  map std::chrono date --> (map hour --> weather)
   std::map<chrono_date, std::map<std::chrono::hours, Weather>> hourWeather;
 
   { // Parse JSON using nlohmann/json and fill our Weather classes
@@ -153,7 +149,6 @@ int main() {
       auto tt = str2minutes(el.get<std::string>());
       auto hourDate = std::chrono::time_point_cast<std::chrono::days>(tt);
       std::cout << tt << "|||" << hourDate << std::endl;
-      std::cin.get();
       auto hourNum = std::chrono::hh_mm_ss(tt - hourDate).hours();
 
       // check if we already have this date in our map
