@@ -1,14 +1,13 @@
+#include <bitset>
+#include <chrono>
+#include <ctime>
 #include <curl/curl.h>
 #include <fcntl.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <termios.h>
-#include <chrono>
-#include <ctime>
 #include <unistd.h>
-
-using json = nlohmann::json;
 
 // shortcut to use std::chrono, minutes
 using chrono_minutes =
@@ -36,21 +35,107 @@ inline std::string date2str(const chrono_date &cd) {
 
 class Weather {
 public:
-  double temp;       // -51.2__51.1 step 0.1 - 10 bits
-  double tempFeel;   // -64...63 step 1 - 7 bits
+  double temp;       // -22.0__41.5 step 0.5 - 7 bits
+  double tempFeel;   // -64.0...63.5 step 0.5 - 8 bits
   int humid;         // 0__100 step 1 - 7 bits
   double precip;     // 0__25.6 - 8 bits
   double precipProb; // 0___100 - 7 bits
   double wind;       // 0___51.2 - 9 bits
   int cloud;         // 0___100 - 7 bits
-  // total 35+14+9=49+9=58bits/8=8bytes
+  // total 8+8+7+8+7+9+7=24+21+9=54 bits
+  // too much info, we should reduce bit count to something
+  // manageable, 3 days of info per 24 hours is 72,
+  // 3 bytes of info per hour gives us:
+  // temp: 7 bits, precip: 5 bits, precipProb: 4 bits,
+  // cloud: 4 bits of info
+  std::bitset<22> to_bitset() {
+    // temperature: -22 is our min, 41.5 is max, step 0.5
+    uint32_t processed_t = static_cast<int>((temp + 22.) * 2 + 0.5);
+    if (processed_t > 127)
+      processed_t = 127; // 7 bits
+
+    // precipitation 0__25.5, step 0.1
+    uint32_t processed_p = static_cast<int>(precip * 10. + 0.5);
+    if (processed_p > 255)
+      processed_p = 255; // 8 bits
+
+    // precipitation probability: 0__100 step 10
+    uint32_t processed_pp = static_cast<int>(precipProb / 10. + 0.5);
+    if (processed_pp > 10)
+      processed_pp = 10; // 3.5 bits
+
+    // cloud: 0__100 step 10
+    uint32_t processed_c = static_cast<int>(cloud / 10. + 0.5);
+    if (processed_c > 10)
+      processed_c = 10; // 3.5 bits
+
+    // now pack that all into one uint32_t value
+    // 0...6 | 7...14 | 15...21
+    uint32_t res = processed_t << (8 + 7) /*last bits*/ |
+                   processed_p << 7 /*middle bits*/ |
+                   (processed_pp * 11 + processed_c) /*first bits*/;
+//        std::cout << std::hex << res << std::dec << "\n";
+    return std::bitset<22>(res);
+  }
+
   // short string representation of HourlyWeather for Arduino
+  // to be removed, not used anymore
   friend std::ostream &operator<<(std::ostream &outs, const Weather &w) {
     return outs << "[" << static_cast<int>(w.temp * 10) << "|"
                 << static_cast<int>(w.tempFeel * 10) << "|" << w.humid << "|"
                 << static_cast<int>(w.precip * 10) << "|"
                 << static_cast<int>(w.precipProb * 10) << "|"
                 << static_cast<int>(w.wind * 10) << "|" << w.cloud << "]";
+  }
+};
+
+class NowWeather : public Weather {
+public:
+  chrono_minutes nowTime;
+  std::bitset<48> to_bitset() {
+    // temperature: -51.2 is our min, 51.1 is max, step 0.1
+    uint64_t processed_t = static_cast<int>((temp + 51.2) * 10 + 0.5);
+    if (processed_t > 1023)
+      processed_t = 1023; // 10 bits
+
+    // tempFeel: -51.2 is our min, 51.1 is max, step 0.1
+    uint64_t processed_tf = static_cast<int>((tempFeel + 51.2) * 10 + 0.5);
+    if (processed_tf > 1023)
+      processed_tf = 1023; // 10 bits
+
+    // humidity: 0__100
+    uint32_t processed_h = humid;
+    if (processed_h > 100)
+      processed_h = 100; // 7 bits
+
+    // precipitation 0__25.5 step 0.1
+    uint32_t processed_p = static_cast<int>(precip * 10. + 0.5);
+    if (processed_p > 31)
+      processed_p = 31; // 5 bits
+
+    // precipitation probability: 0__100 step 10
+    uint32_t processed_pp = static_cast<int>(precipProb / 10. + 0.5);
+    if (processed_pp > 10)
+      processed_pp = 10; // 3.5 bits
+
+    uint32_t processed_w = static_cast<int>(wind * 10.);
+    if (processed_w > 511)
+      processed_w = 511; // 9 bits
+
+    // cloud: 0__100 step 10
+    uint32_t processed_c = static_cast<int>(cloud / 10. + 0.5);
+    if (processed_c > 10)
+      processed_c = 10; // 3.5 bits
+
+    // now pack that all into one uint64_t value
+    int64_t res = processed_t << (7 + 9 + 5 + 7 + 10) |
+                  processed_tf << (7 + 9 + 5 + 7) |
+                  processed_h << (7 + 9 + 5) |
+                  processed_p << (7 + 9) |
+                  processed_w << 7 |
+                  (processed_pp * 11 + processed_c);
+      std::cout << std::hex << res << std::dec << "\n";
+    return std::bitset<48>(res);
   }
 };
 
@@ -103,13 +188,14 @@ int main() {
   }
 
   // this is current weather
-  Weather nowWeather;
+  NowWeather nowWeather;
   chrono_minutes nowTime;
   // this is our forecast
   //  map std::chrono date --> (map hour --> weather)
   std::map<chrono_date, std::map<std::chrono::hours, Weather>> hourWeather;
 
   { // Parse JSON using nlohmann/json and fill our Weather classes
+    using json = nlohmann::json;
     auto data = json::parse(responseString);
 
     // get units
@@ -122,7 +208,7 @@ int main() {
                 currCloudUnit = data["current_units"]["cloud_cover"];
     // get values
     //    nowTime = str2tm(data["current"]["time"].get<std::string>());
-    nowTime = str2minutes(data["current"]["time"].get<std::string>());
+    nowWeather.nowTime = str2minutes(data["current"]["time"].get<std::string>());
     nowWeather.temp = data["current"]["temperature_2m"];
     nowWeather.tempFeel = data["current"]["apparent_temperature"];
     nowWeather.humid = data["current"]["relative_humidity_2m"];
@@ -134,7 +220,8 @@ int main() {
     [[maybe_unused]] double rain = data["current"]["rain"];
     [[maybe_unused]] double showers = data["current"]["showers"];
     [[maybe_unused]] double snowfall = data["current"]["snowfall"];
-
+    nowWeather.to_bitset();
+#ifdef DEBUG
     std::cout << "Teraz: " << nowWeather.temp << currTempUnit
               << ", odczuwalnie " << nowWeather.tempFeel << currTempFeelUnit
               << ", wilgotność: " << nowWeather.humid << currHumidUnit << ",\n"
@@ -143,20 +230,18 @@ int main() {
               << ", zachmurzenie: " << nowWeather.cloud << currCloudUnit
               << "\n\n";
 
+#endif
     for (auto &el : data["hourly"]["time"]) {
       static int counter = 0;
-      //    std::cout << key << "->" << value << "\t";
       auto tt = str2minutes(el.get<std::string>());
       auto hourDate = std::chrono::time_point_cast<std::chrono::days>(tt);
-      std::cout << tt << "|||" << hourDate << std::endl;
       auto hourNum = std::chrono::hh_mm_ss(tt - hourDate).hours();
 
       // check if we already have this date in our map
       auto search = hourWeather.find(hourDate);
-      if (search == hourWeather.end()) {
+      if (search == hourWeather.end())
         hourWeather[hourDate] = std::map<std::chrono::hours, Weather>();
-        //        std::cout << "\n" << hourDate << ":\n";
-      }
+
       Weather w = Weather();
       // read hourly params
       w.temp = data["hourly"]["temperature_2m"][counter];
@@ -168,11 +253,12 @@ int main() {
       w.cloud = data["hourly"]["cloud_cover_mid"][counter];
       // add new element
       hourWeather[hourDate][hourNum] = w;
-      std::cout << hourNum << "->";
-      std::cout << el.get<std::string>() << "->";
+#ifdef DEBUG
+      std::cout << hourDate << "->" << hourNum << "->";
       std::cout << w.temp << "|" << w.tempFeel << "|" << w.humid << "|"
-                << w.precip << "|" << w.precipProb << "|" << w.wind << "|";
-      std::cout << "|||counter: " << counter << "\n" << w.cloud;
+                << w.precip << "|" << w.precipProb << "|" << w.wind << "|"
+                << w.cloud << "\n";
+#endif
       counter++;
     }
   }
