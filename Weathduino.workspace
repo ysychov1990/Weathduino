@@ -2,11 +2,11 @@
 <CodeLite_Workspace Name="Weathduino" Database="" Version="10000">
   <Project Name="Weathduino" Path="Weathduino.project" Active="Yes"/>
   <BuildMatrix>
-    <WorkspaceConfiguration Name="Debug">
+    <WorkspaceConfiguration Name="Release">
       <Environment/>
       <Project Name="Weathduino" ConfigName="Debug"/>
     </WorkspaceConfiguration>
-    <WorkspaceConfiguration Name="Release">
+    <WorkspaceConfiguration Name="Debug">
       <Environment/>
       <Project Name="Weathduino" ConfigName="Debug"/>
     </WorkspaceConfiguration>

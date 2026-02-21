@@ -74,7 +74,7 @@ public:
     uint32_t res = processed_t << (8 + 7) /*last bits*/ |
                    processed_p << 7 /*middle bits*/ |
                    (processed_pp * 11 + processed_c) /*first bits*/;
-//        std::cout << std::hex << res << std::dec << "\n";
+    //        std::cout << std::hex << res << std::dec << "\n";
     return std::bitset<22>(res);
   }
 
@@ -128,13 +128,13 @@ public:
       processed_c = 10; // 3.5 bits
 
     // now pack that all into one uint64_t value
-    int64_t res = processed_t << (7 + 9 + 5 + 7 + 10) |
-                  processed_tf << (7 + 9 + 5 + 7) |
-                  processed_h << (7 + 9 + 5) |
-                  processed_p << (7 + 9) |
-                  processed_w << 7 |
+    int64_t res = processed_t << (7 + 9 + 5 + 7 + 10) | //
+                  processed_tf << (7 + 9 + 5 + 7) |     //
+                  processed_h << (7 + 9 + 5) |          //
+                  processed_p << (7 + 9) |              //
+                  processed_w << 7 |                    //
                   (processed_pp * 11 + processed_c);
-      std::cout << std::hex << res << std::dec << "\n";
+    std::cout << std::hex << res << std::dec << "\n";
     return std::bitset<48>(res);
   }
 };
@@ -187,11 +187,9 @@ int main() {
     responseString = osresponse.str();
   }
 
-  // this is current weather
-  NowWeather nowWeather;
-  chrono_minutes nowTime;
+  NowWeather nw; // this is current weather
   // this is our forecast
-  //  map std::chrono date --> (map hour --> weather)
+  //  map chrono_date --> (map hour --> weather)
   std::map<chrono_date, std::map<std::chrono::hours, Weather>> hourWeather;
 
   { // Parse JSON using nlohmann/json and fill our Weather classes
@@ -207,28 +205,26 @@ int main() {
                 currPrecipUnit = data["current_units"]["precipitation"],
                 currCloudUnit = data["current_units"]["cloud_cover"];
     // get values
-    //    nowTime = str2tm(data["current"]["time"].get<std::string>());
-    nowWeather.nowTime = str2minutes(data["current"]["time"].get<std::string>());
-    nowWeather.temp = data["current"]["temperature_2m"];
-    nowWeather.tempFeel = data["current"]["apparent_temperature"];
-    nowWeather.humid = data["current"]["relative_humidity_2m"];
-    nowWeather.precip = data["current"]["precipitation"];
-    nowWeather.precipProb = data["current"]["precipitation_probability"];
-    nowWeather.wind = data["current"]["wind_speed_10m"];
-    nowWeather.cloud = data["current"]["cloud_cover"];
+    nw.nowTime = str2minutes(data["current"]["time"].get<std::string>());
+    nw.temp = data["current"]["temperature_2m"];
+    nw.tempFeel = data["current"]["apparent_temperature"];
+    nw.humid = data["current"]["relative_humidity_2m"];
+    nw.precip = data["current"]["precipitation"];
+    nw.precipProb = data["current"]["precipitation_probability"];
+    nw.wind = data["current"]["wind_speed_10m"];
+    nw.cloud = data["current"]["cloud_cover"];
     [[maybe_unused]] int code = data["current"]["weather_code"];
     [[maybe_unused]] double rain = data["current"]["rain"];
     [[maybe_unused]] double showers = data["current"]["showers"];
     [[maybe_unused]] double snowfall = data["current"]["snowfall"];
-    nowWeather.to_bitset();
+    nw.to_bitset();
 #ifdef DEBUG
-    std::cout << "Teraz: " << nowWeather.temp << currTempUnit
-              << ", odczuwalnie " << nowWeather.tempFeel << currTempFeelUnit
-              << ", wilgotność: " << nowWeather.humid << currHumidUnit << ",\n"
-              << "wiatr: " << nowWeather.wind << currWindUnit
-              << ", opady: " << nowWeather.precip << currPrecipUnit
-              << ", zachmurzenie: " << nowWeather.cloud << currCloudUnit
-              << "\n\n";
+    std::cout << "Teraz: " << nw.temp << currTempUnit << ", odczuwalnie "
+              << nw.tempFeel << currTempFeelUnit << ", wilgotność: " << nw.humid
+              << currHumidUnit << ",\n"
+              << "wiatr: " << nw.wind << currWindUnit
+              << ", opady: " << nw.precip << currPrecipUnit
+              << ", zachmurzenie: " << nw.cloud << currCloudUnit << "\n\n";
 
 #endif
     for (auto &el : data["hourly"]["time"]) {
@@ -242,7 +238,7 @@ int main() {
       if (search == hourWeather.end())
         hourWeather[hourDate] = std::map<std::chrono::hours, Weather>();
 
-      Weather w = Weather();
+      auto w = Weather();
       // read hourly params
       w.temp = data["hourly"]["temperature_2m"][counter];
       w.tempFeel = data["hourly"]["apparent_temperature"][counter];
@@ -263,31 +259,73 @@ int main() {
     }
   }
 
-  std::string outputString{};
+  std::vector<unsigned char> outv_array[4]{};
   { // formulate our data for Arduino
-    std::ostringstream oss;
+    // 4 blocks of info
+    // current weather, today's, tomorrow's,
+    // and the next day's weather
+    // Data structure: first char: block type ['0', '1', '2', '3']
+    // second char - string block length,
+    // then string, then bits of info
     // First block: current weather
-    // DateTime:[Weather]
-    oss << minutes2str(nowTime) << nowWeather << "\n";
-    // Other blocks: today:24 weather blocks, and the same
-    // for tomorrow and day after
-    for (int i = 0; i < 3; i++) {
+    outv_array[0].clear();
+    outv_array[0].push_back('0');
+    std::string s =
+        std::format(std::locale("C"), "{:%Y-%m-%d %H:%M}", nw.nowTime);
+    outv_array[0].push_back(static_cast<unsigned char>(s.size()));
+    std::copy(s.begin(), s.end(), std::back_inserter(outv_array[0]));
+    auto b = nw.to_bitset();
+    unsigned char out_char = 0, out_char_bit = 0;
+    for (unsigned int i = 0; i < b.size(); i++) {
+      out_char = out_char | b[i] << out_char_bit;
+      if (out_char_bit == 7) {
+        outv_array[0].push_back(out_char);
+        out_char = out_char_bit = 0;
+      }
+      else out_char_bit++;
+    }
+    if (out_char_bit) outv_array[0].push_back(out_char);
+
+    // 2nd, 3rd and 4th blocks
+    for (int i = 1; i < 4; i++) {
       static auto it = hourWeather.begin();
-      if (i)
-        oss << "\n";
-      oss << it->first;
-      for (auto j = it->second.begin(); j != it->second.end(); j++)
-        oss << j->second;
+      outv_array[i].clear();
+      outv_array[i].push_back('0' + i);
+      std::string s = std::format(std::locale("C"), "{:%Y-%m-%d}", it->first);
+      outv_array[i].push_back(static_cast<unsigned char>(s.size()));
+      std::copy(s.begin(), s.end(), std::back_inserter(outv_array[i]));
+      out_char = out_char_bit = 0;
+      for (auto &j : it->second) {
+        auto b = j.second.to_bitset();
+        for (unsigned int k = 0; k < b.size(); k++) {
+          out_char = out_char | b[k] << out_char_bit;
+          if (out_char_bit == 7) {
+            outv_array[i].push_back(out_char);
+            out_char = out_char_bit = 0;
+          }
+          else out_char_bit++;
+        }
+      }
+      if (out_char_bit) outv_array[i].push_back(out_char);
       it++;
     }
-    outputString = oss.str();
+
+    for (int i = 0; i < 4; i++) {
+      std::cout << "\n\noutv_array[" << i << "]:size " << std::dec << outv_array[i].size() << "\n";
+      for (unsigned int j = 0; j < outv_array[i].size(); j++) {
+        std::cout << outv_array[i][j] << " 0x" << std::hex
+                  << static_cast<unsigned int>(outv_array[i][j])
+                  << (j % 8 == 7 ? "\n" : "\t");
+      }
+    }
+    std::cout << "\n\n\n";
   }
 
   // 1. Setup Serial Connection to Arduino
   const char *port = "/dev/ttyACM0";
   int serial_dev = open(port, O_RDWR);
 
-  write(serial_dev, outputString.c_str(), outputString.length());
+  //write(serial_dev, outputString.c_str(), outputString.length());
   //    std::cout << "Sent to Arduino: " << payload << std::endl;
 
   // Simple Serial Configuration (Baud 9600)
