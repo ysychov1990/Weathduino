@@ -2,18 +2,15 @@
 #include <chrono>
 #include <ctime>
 #include <curl/curl.h>
-#include <fcntl.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <termios.h>
+#include <thread>
 #include <unistd.h>
-#include <filesystem>
-#include <fstream>
 
-#include "Weather.hpp"
+#include "ArduinoSerial.hpp"
 #include "NowWeather.hpp"
-
+#include "Weather.hpp"
 
 // shortcut to use std::chrono, minutes
 using chrono_minutes =
@@ -38,49 +35,6 @@ inline chrono_minutes str2minutes(const std::string &s) {
 inline std::string date2str(const chrono_date &cd) {
   return std::format(std::locale("C"), "%Y-%m-%d", cd);
 }*/
-
-/* Finds filename for specific Arduino device
- * returns string filename, or empty string
- * when device is not found */
-std::string findArduino() {
-  namespace fs = std::filesystem;
-
-  fs::path devPath = "/dev";
-
-  try {
-    for (const auto &entry : fs::directory_iterator(devPath)) {
-      fs::path filename = entry.path().filename();
-      fs::path fullname = entry.path();
-
-      // Filter for ttyACM devices
-      if (filename.string().find("ttyACM") != 0)
-        continue;
-      // Path to hardware properties in sysfs
-      // Usually: /sys/class/tty/ttyACM0/device/../
-      fs::path sysBase = fs::path("/sys/class/tty/") / filename / "device/..";
-
-      // Resolve symlink to get actual hardware path
-      // like /sys/devices/pci0000:00/.../usb1/.../
-      // similar to `symlink -f /sys/class/tty/ttyACM0/device/../`
-      fs::path sysPath = fs::canonical(sysBase);
-
-      // lambda to read single string
-      auto readFsLine = [&sysPath](std::string f) -> std::string {
-        std::string value;
-        std::ifstream(sysPath / f) >> value;
-        return value;
-      };
-
-      if (readFsLine("idVendor") == "2341" &&
-          readFsLine("idProduct") == "0043" &&
-          readFsLine("manufacturer") == "Arduino")
-        return entry.path();
-    }
-  } catch (const fs::filesystem_error &e) {
-    std::cerr << "Error scanning /dev: " << e.what() << std::endl;
-  }
-  return "";
-}
 
 int main() {
   std::string responseString{};
@@ -267,25 +221,58 @@ int main() {
     std::cout << "\n\n\n";
   }
 
-  // 1. Setup Serial Connection to Arduino
-  std::string ardu = findArduino();
-  if (ardu.length() == 0) {
-    std::cout << "No Arduino tty found.\n";
+  try {
+    ArduinoSerial arduino {};
+    // Wait a moment for the bootloader to finish.
+    std::cout << "Waiting for Arduino to initialize...\n";
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    // 3. Send the 4 Packets
+    for (int i = 0; i < 4; ++i) {
+      std::cout << "Sending packet " << i << " (" << outv_array[i].size()
+                << " bytes)... ";
+
+      // Write packet
+      ssize_t written =
+          write(arduino.getFd(), outv_array[i].data(), outv_array[i].size());
+      if (written < 0) {
+        std::cerr << "\nError writing to serial!\n";
+        break;
+      }
+
+      // Wait for "OK i" acknowledgment
+      char read_buf[32];
+      std::string response;
+      bool received_ok = false;
+      int retry_count = 0;
+
+      while (retry_count < 5 && !received_ok) {
+        memset(read_buf, 0, sizeof(read_buf));
+        int n = read(arduino.getFd(), read_buf, sizeof(read_buf) - 1);
+
+        if (n > 0) {
+          response += std::string(read_buf, n);
+          std::string expected = "OK " + std::to_string(i);
+          if (response.find(expected) != std::string::npos) {
+            std::cout << "Success: " << expected << "\n";
+            received_ok = true;
+          }
+        }
+        usleep(100000); // Wait 100ms before checking again
+        retry_count++;
+      }
+
+      if (!received_ok) {
+        std::cerr << "Timeout or wrong response. Received: " << response
+                  << "\n";
+        // Decide if you want to break or continue here
+      }
+    }
+  } catch (std::runtime_error &e) {
+    std::cout << "Runtime error: " << e.what() << std::endl;
     return 1;
   }
-  int serial_dev = open(ardu.c_str(), O_RDWR);
 
-  // write(serial_dev, outputString.c_str(), outputString.length());
-  //     std::cout << "Sent to Arduino: " << payload << std::endl;
-
-  // Simple Serial Configuration (Baud 9600)
-  struct termios tty;
-  tcgetattr(serial_dev, &tty);
-  cfsetospeed(&tty, B9600);
-  tcdrain(serial_dev);
-  tcsetattr(serial_dev, TCSANOW, &tty);
-
-  close(serial_dev);
+  std::cout << "Done. Press any key to continue. ";
   std::cin.get();
   return 0;
 }

@@ -3,11 +3,13 @@
   <Description/>
   <Dependencies/>
   <VirtualDirectory Name="src">
+    <File Name="ArduinoSerial.cpp"/>
     <File Name="Weather.cpp"/>
     <File Name="NowWeather.cpp"/>
     <File Name="main.cpp"/>
   </VirtualDirectory>
   <VirtualDirectory Name="include">
+    <File Name="ArduinoSerial.hpp"/>
     <File Name="Weather.hpp"/>
     <File Name="NowWeather.hpp"/>
   </VirtualDirectory>
