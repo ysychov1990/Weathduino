@@ -3,9 +3,14 @@
   <Description/>
   <Dependencies/>
   <VirtualDirectory Name="src">
+    <File Name="Weather.cpp"/>
+    <File Name="NowWeather.cpp"/>
     <File Name="main.cpp"/>
   </VirtualDirectory>
-  <VirtualDirectory Name="include"/>
+  <VirtualDirectory Name="include">
+    <File Name="Weather.hpp"/>
+    <File Name="NowWeather.hpp"/>
+  </VirtualDirectory>
   <Settings Type="Executable">
     <GlobalSettings>
       <Compiler Options="" C_Options="" Assembler="">

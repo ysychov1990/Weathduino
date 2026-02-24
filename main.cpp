@@ -8,6 +8,12 @@
 #include <string>
 #include <termios.h>
 #include <unistd.h>
+#include <filesystem>
+#include <fstream>
+
+#include "Weather.hpp"
+#include "NowWeather.hpp"
+
 
 // shortcut to use std::chrono, minutes
 using chrono_minutes =
@@ -26,118 +32,55 @@ inline chrono_minutes str2minutes(const std::string &s) {
 
   return cm;
 }
-inline std::string minutes2str(const chrono_minutes &cm) {
+/*inline std::string minutes2str(const chrono_minutes &cm) {
   return std::format(std::locale("C"), "%H:%M", cm);
 }
 inline std::string date2str(const chrono_date &cd) {
   return std::format(std::locale("C"), "%Y-%m-%d", cd);
+}*/
+
+/* Finds filename for specific Arduino device
+ * returns string filename, or empty string
+ * when device is not found */
+std::string findArduino() {
+  namespace fs = std::filesystem;
+
+  fs::path devPath = "/dev";
+
+  try {
+    for (const auto &entry : fs::directory_iterator(devPath)) {
+      fs::path filename = entry.path().filename();
+      fs::path fullname = entry.path();
+
+      // Filter for ttyACM devices
+      if (filename.string().find("ttyACM") != 0)
+        continue;
+      // Path to hardware properties in sysfs
+      // Usually: /sys/class/tty/ttyACM0/device/../
+      fs::path sysBase = fs::path("/sys/class/tty/") / filename / "device/..";
+
+      // Resolve symlink to get actual hardware path
+      // like /sys/devices/pci0000:00/.../usb1/.../
+      // similar to `symlink -f /sys/class/tty/ttyACM0/device/../`
+      fs::path sysPath = fs::canonical(sysBase);
+
+      // lambda to read single string
+      auto readFsLine = [&sysPath](std::string f) -> std::string {
+        std::string value;
+        std::ifstream(sysPath / f) >> value;
+        return value;
+      };
+
+      if (readFsLine("idVendor") == "2341" &&
+          readFsLine("idProduct") == "0043" &&
+          readFsLine("manufacturer") == "Arduino")
+        return entry.path();
+    }
+  } catch (const fs::filesystem_error &e) {
+    std::cerr << "Error scanning /dev: " << e.what() << std::endl;
+  }
+  return "";
 }
-
-class Weather {
-public:
-  double temp;       // -22.0__41.5 step 0.5 - 7 bits
-  double tempFeel;   // -64.0...63.5 step 0.5 - 8 bits
-  int humid;         // 0__100 step 1 - 7 bits
-  double precip;     // 0__25.6 - 8 bits
-  double precipProb; // 0___100 - 7 bits
-  double wind;       // 0___51.2 - 9 bits
-  int cloud;         // 0___100 - 7 bits
-  // total 8+8+7+8+7+9+7=24+21+9=54 bits
-  // too much info, we should reduce bit count to something
-  // manageable, 3 days of info per 24 hours is 72,
-  // 3 bytes of info per hour gives us:
-  // temp: 7 bits, precip: 5 bits, precipProb: 4 bits,
-  // cloud: 4 bits of info
-  std::bitset<22> to_bitset() {
-    // temperature: -22 is our min, 41.5 is max, step 0.5
-    uint32_t processed_t = static_cast<int>((temp + 22.) * 2 + 0.5);
-    if (processed_t > 127)
-      processed_t = 127; // 7 bits
-
-    // precipitation 0__25.5, step 0.1
-    uint32_t processed_p = static_cast<int>(precip * 10. + 0.5);
-    if (processed_p > 255)
-      processed_p = 255; // 8 bits
-
-    // precipitation probability: 0__100 step 10
-    uint32_t processed_pp = static_cast<int>(precipProb / 10. + 0.5);
-    if (processed_pp > 10)
-      processed_pp = 10; // 3.5 bits
-
-    // cloud: 0__100 step 10
-    uint32_t processed_c = static_cast<int>(cloud / 10. + 0.5);
-    if (processed_c > 10)
-      processed_c = 10; // 3.5 bits
-
-    // now pack that all into one uint32_t value
-    // 0...6 | 7...14 | 15...21
-    uint32_t res = processed_t << (8 + 7) /*last bits*/ |
-                   processed_p << 7 /*middle bits*/ |
-                   (processed_pp * 11 + processed_c) /*first bits*/;
-    //        std::cout << std::hex << res << std::dec << "\n";
-    return std::bitset<22>(res);
-  }
-
-  // short string representation of HourlyWeather for Arduino
-  // to be removed, not used anymore
-  friend std::ostream &operator<<(std::ostream &outs, const Weather &w) {
-    return outs << "[" << static_cast<int>(w.temp * 10) << "|"
-                << static_cast<int>(w.tempFeel * 10) << "|" << w.humid << "|"
-                << static_cast<int>(w.precip * 10) << "|"
-                << static_cast<int>(w.precipProb * 10) << "|"
-                << static_cast<int>(w.wind * 10) << "|" << w.cloud << "]";
-  }
-};
-
-class NowWeather : public Weather {
-public:
-  chrono_minutes nowTime;
-  std::bitset<48> to_bitset() {
-    // temperature: -51.2 is our min, 51.1 is max, step 0.1
-    uint64_t processed_t = static_cast<int>((temp + 51.2) * 10 + 0.5);
-    if (processed_t > 1023)
-      processed_t = 1023; // 10 bits
-
-    // tempFeel: -51.2 is our min, 51.1 is max, step 0.1
-    uint64_t processed_tf = static_cast<int>((tempFeel + 51.2) * 10 + 0.5);
-    if (processed_tf > 1023)
-      processed_tf = 1023; // 10 bits
-
-    // humidity: 0__100
-    uint32_t processed_h = humid;
-    if (processed_h > 100)
-      processed_h = 100; // 7 bits
-
-    // precipitation 0__25.5 step 0.1
-    uint32_t processed_p = static_cast<int>(precip * 10. + 0.5);
-    if (processed_p > 31)
-      processed_p = 31; // 5 bits
-
-    // precipitation probability: 0__100 step 10
-    uint32_t processed_pp = static_cast<int>(precipProb / 10. + 0.5);
-    if (processed_pp > 10)
-      processed_pp = 10; // 3.5 bits
-
-    uint32_t processed_w = static_cast<int>(wind * 10.);
-    if (processed_w > 511)
-      processed_w = 511; // 9 bits
-
-    // cloud: 0__100 step 10
-    uint32_t processed_c = static_cast<int>(cloud / 10. + 0.5);
-    if (processed_c > 10)
-      processed_c = 10; // 3.5 bits
-
-    // now pack that all into one uint64_t value
-    int64_t res = processed_t << (7 + 9 + 5 + 7 + 10) | //
-                  processed_tf << (7 + 9 + 5 + 7) |     //
-                  processed_h << (7 + 9 + 5) |          //
-                  processed_p << (7 + 9) |              //
-                  processed_w << 7 |                    //
-                  (processed_pp * 11 + processed_c);
-    std::cout << std::hex << res << std::dec << "\n";
-    return std::bitset<48>(res);
-  }
-};
 
 int main() {
   std::string responseString{};
@@ -281,10 +224,11 @@ int main() {
       if (out_char_bit == 7) {
         outv_array[0].push_back(out_char);
         out_char = out_char_bit = 0;
-      }
-      else out_char_bit++;
+      } else
+        out_char_bit++;
     }
-    if (out_char_bit) outv_array[0].push_back(out_char);
+    if (out_char_bit)
+      outv_array[0].push_back(out_char);
 
     // 2nd, 3rd and 4th blocks
     for (int i = 1; i < 4; i++) {
@@ -302,16 +246,18 @@ int main() {
           if (out_char_bit == 7) {
             outv_array[i].push_back(out_char);
             out_char = out_char_bit = 0;
-          }
-          else out_char_bit++;
+          } else
+            out_char_bit++;
         }
       }
-      if (out_char_bit) outv_array[i].push_back(out_char);
+      if (out_char_bit)
+        outv_array[i].push_back(out_char);
       it++;
     }
 
     for (int i = 0; i < 4; i++) {
-      std::cout << "\n\noutv_array[" << i << "]:size " << std::dec << outv_array[i].size() << "\n";
+      std::cout << "\n\noutv_array[" << i << "]:size " << std::dec
+                << outv_array[i].size() << "\n";
       for (unsigned int j = 0; j < outv_array[i].size(); j++) {
         std::cout << outv_array[i][j] << " 0x" << std::hex
                   << static_cast<unsigned int>(outv_array[i][j])
@@ -322,11 +268,15 @@ int main() {
   }
 
   // 1. Setup Serial Connection to Arduino
-  const char *port = "/dev/ttyACM0";
-  int serial_dev = open(port, O_RDWR);
+  std::string ardu = findArduino();
+  if (ardu.length() == 0) {
+    std::cout << "No Arduino tty found.\n";
+    return 1;
+  }
+  int serial_dev = open(ardu.c_str(), O_RDWR);
 
-  //write(serial_dev, outputString.c_str(), outputString.length());
-  //    std::cout << "Sent to Arduino: " << payload << std::endl;
+  // write(serial_dev, outputString.c_str(), outputString.length());
+  //     std::cout << "Sent to Arduino: " << payload << std::endl;
 
   // Simple Serial Configuration (Baud 9600)
   struct termios tty;
