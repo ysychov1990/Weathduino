@@ -29,6 +29,13 @@ inline chrono_minutes str2minutes(const std::string &s) {
 
   return cm;
 }
+inline void chrono_sleep(int duration) {
+  std::this_thread::sleep_for(std::chrono::seconds(duration));
+}
+inline void chrono_sleep(double duration) {
+  std::this_thread::sleep_for(
+      std::chrono::milliseconds(static_cast<int>(duration / 1000.)));
+}
 /*inline std::string minutes2str(const chrono_minutes &cm) {
   return std::format(std::locale("C"), "%H:%M", cm);
 }
@@ -222,11 +229,11 @@ int main() {
   }
 
   try {
-    ArduinoSerial arduino {};
+    ArduinoSerial arduino{};
     // Wait a moment for the bootloader to finish.
     std::cout << "Waiting for Arduino to initialize...\n";
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    // 3. Send the 4 Packets
+    chrono_sleep(4);
+    // Send 4 Packets
     for (int i = 0; i < 4; ++i) {
       std::cout << "Sending packet " << i << " (" << outv_array[i].size()
                 << " bytes)... ";
@@ -248,7 +255,11 @@ int main() {
       while (retry_count < 5 && !received_ok) {
         memset(read_buf, 0, sizeof(read_buf));
         int n = read(arduino.getFd(), read_buf, sizeof(read_buf) - 1);
-
+        std::cout << "recieved: ";
+        for (int l = 0; l < n; ++l) {
+          std::cout << std::hex << int(read_buf[l]);
+        }
+        std::cout << "\n";
         if (n > 0) {
           response += std::string(read_buf, n);
           std::string expected = "OK " + std::to_string(i);
@@ -257,7 +268,7 @@ int main() {
             received_ok = true;
           }
         }
-        usleep(100000); // Wait 100ms before checking again
+        chrono_sleep(1); // wait 0.1 s
         retry_count++;
       }
 
