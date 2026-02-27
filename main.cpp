@@ -153,79 +153,76 @@ int main() {
       w.cloud = data["hourly"]["cloud_cover_mid"][counter];
       // add new element
       hourWeather[hourDate][hourNum] = w;
-#ifdef DEBUG
-      std::cout << hourDate << "->" << hourNum << "->";
-      std::cout << w.temp << "|" << w.tempFeel << "|" << w.humid << "|"
-                << w.precip << "|" << w.precipProb << "|" << w.wind << "|"
-                << w.cloud << "\n";
-#endif
+//      std::cout << hourDate << "->" << hourNum << "->";
+//      std::cout << w.temp << "|" << w.tempFeel << "|" << w.humid << "|"
+//                << w.precip << "|" << w.precipProb << "|" << w.wind << "|"
+//                << w.cloud << "\n";
       counter++;
     }
   }
 
-  std::vector<unsigned char> outv_array[4]{};
+  std::vector<std::vector<unsigned char>> outData;
+  int outDataCounter = 0;
+  auto outDataPusher = [&outData, &outDataCounter](unsigned char c) {
+    // if last packet is formed (64 bytes), add another one
+    if (outDataCounter++ % 63 == 0)
+      outData.push_back(std::vector<unsigned char>{});
+    outData.back().push_back(c);
+  };
+  
   { // formulate our data for Arduino
-    // 4 blocks of info
+    // blocks of info [max 63 bytes long]
     // current weather, today's, tomorrow's,
     // and the next day's weather
     // Data structure: first char: block type ['0', '1', '2', '3']
     // second char - string block length,
-    // then string, then bits of info
+    // then string, then bits of info [6 bytes for block '0',
+    // 66 bytes for blocks '1'-'3'
     // First block: current weather
-    outv_array[0].clear();
-    outv_array[0].push_back('0');
+    outDataPusher('0');
     std::string s =
         std::format(std::locale("C"), "{:%Y-%m-%d %H:%M}", nw.nowTime);
-    outv_array[0].push_back(static_cast<unsigned char>(s.size()));
-    std::copy(s.begin(), s.end(), std::back_inserter(outv_array[0]));
+    outDataPusher(s.size());
+    for (auto &i : s)
+      outDataPusher(i);
     auto b = nw.to_bitset();
     unsigned char out_char = 0, out_char_bit = 0;
     for (unsigned int i = 0; i < b.size(); i++) {
       out_char = out_char | b[i] << out_char_bit;
       if (out_char_bit == 7) {
-        outv_array[0].push_back(out_char);
+        outDataPusher(out_char);
         out_char = out_char_bit = 0;
       } else
         out_char_bit++;
     }
-    if (out_char_bit)
-      outv_array[0].push_back(out_char);
+    if (out_char_bit) {
+      outDataPusher(out_char);
+    }
 
     // 2nd, 3rd and 4th blocks
     for (int i = 1; i < 4; i++) {
       static auto it = hourWeather.begin();
-      outv_array[i].clear();
-      outv_array[i].push_back('0' + i);
+      outDataPusher('0' + i);
       std::string s = std::format(std::locale("C"), "{:%Y-%m-%d}", it->first);
-      outv_array[i].push_back(static_cast<unsigned char>(s.size()));
-      std::copy(s.begin(), s.end(), std::back_inserter(outv_array[i]));
+      outDataPusher(s.size());
+      for (auto &i : s) outDataPusher(i);
       out_char = out_char_bit = 0;
       for (auto &j : it->second) {
         auto b = j.second.to_bitset();
         for (unsigned int k = 0; k < b.size(); k++) {
           out_char = out_char | b[k] << out_char_bit;
           if (out_char_bit == 7) {
-            outv_array[i].push_back(out_char);
+            outDataPusher(out_char);
             out_char = out_char_bit = 0;
           } else
             out_char_bit++;
         }
       }
-      if (out_char_bit)
-        outv_array[i].push_back(out_char);
+      if (out_char_bit) {
+        outDataPusher(out_char);
+      }
       it++;
     }
-
-    for (int i = 0; i < 4; i++) {
-      std::cout << "\n\noutv_array[" << i << "]:size " << std::dec
-                << outv_array[i].size() << "\n";
-      for (unsigned int j = 0; j < outv_array[i].size(); j++) {
-        std::cout << outv_array[i][j] << " 0x" << std::hex
-                  << static_cast<unsigned int>(outv_array[i][j])
-                  << (j % 8 == 7 ? "\n" : "\t");
-      }
-    }
-    std::cout << "\n\n\n";
   }
 
   try {
@@ -234,20 +231,15 @@ int main() {
     std::cout << "Waiting for Arduino to initialize...\n";
     chrono_sleep(4);
     // Send 4 Packets
-    for (int i = 0; i < 4; ++i) {
-      std::cout << "Sending packet " << i << " (" << outv_array[i].size()
-                << " bytes)... ";
-
-      // Write packet
-      ssize_t written =
-          write(arduino.getFd(), outv_array[i].data(), outv_array[i].size());
-      if (written < 0) {
-        std::cerr << "\nError writing to serial!\n";
-        break;
-      }
+    for (auto &i : outData) {
+      static int counter = 0;
+      std::cout << "Sending packet " << ++counter << " (" << i.size() << ") ";
+      auto written = write(arduino.getFd(), i.data(), i.size());
+      if (written < 0)
+        throw std::runtime_error("Error writing to serial!");
 
       // Wait for "OK i" acknowledgment
-      char read_buf[32];
+      char read_buf[64];
       std::string response;
       bool received_ok = false;
       int retry_count = 0;
@@ -255,27 +247,21 @@ int main() {
       while (retry_count < 5 && !received_ok) {
         memset(read_buf, 0, sizeof(read_buf));
         int n = read(arduino.getFd(), read_buf, sizeof(read_buf) - 1);
-        std::cout << "recieved: ";
-        for (int l = 0; l < n; ++l) {
-          std::cout << std::hex << int(read_buf[l]);
-        }
-        std::cout << "\n";
         if (n > 0) {
           response += std::string(read_buf, n);
-          std::string expected = "OK " + std::to_string(i);
+          std::string expected = "OK " + std::to_string(counter) + "\n";
           if (response.find(expected) != std::string::npos) {
-            std::cout << "Success: " << expected << "\n";
+            std::cout << "Success: " << response;
             received_ok = true;
           }
         }
-        chrono_sleep(1); // wait 0.1 s
+        // chrono_sleep(1); // wait 0.1 s
+        usleep(500000);
         retry_count++;
       }
 
       if (!received_ok) {
-        std::cerr << "Timeout or wrong response. Received: " << response
-                  << "\n";
-        // Decide if you want to break or continue here
+        std::cerr << "Timeout/wrong response. Received: " << response << "\n";
       }
     }
   } catch (std::runtime_error &e) {
@@ -283,7 +269,7 @@ int main() {
     return 1;
   }
 
-  std::cout << "Done. Press any key to continue. ";
+  std::cout << "Done.";
   std::cin.get();
   return 0;
 }

@@ -35,15 +35,13 @@
 
 #include <Arduino.h>
 #include <U8g2lib.h>
-
 #include <SPI.h>
 #include <Wire.h>
 #include "unifont_polish2.h"
 
-U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
+//#define SERIAL_RX_BUFFER_SIZE 128 // can be changed in HardwareSerial
 
-static const int weatherStrLength = 20;
-static const int weatherDataLength = 66;
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
 
 struct NowWeather {
   static const int maxStringLength = 20;
@@ -92,9 +90,8 @@ void draw(void) {
 
 State currentState = WAIT_FOR_TYPE;
 byte packetType = 0;
-byte payloadBuffer[256]; // Ensure this is large enough for your longest packet
 int bytesReceived = 0;
-int expectedPayloadSize = 0;
+int totalByteCount = 0;
 
 void processPacket(byte type, byte* data, int len) {
   // Process your data here (e.g., extract bits, update display)
@@ -105,7 +102,7 @@ void processPacket(byte type, byte* data, int len) {
 }
 
 NowWeather nowWeather {};
-Weather weather[3]{};
+Weather weather[3] {};
 
 void setup(void) {
   u8g2.begin();
@@ -113,93 +110,110 @@ void setup(void) {
   u8g2_prepare();
 }
 
+void processByte(byte incomingByte) {
+  totalByteCount++;
+  switch (currentState) {
+    case WAIT_FOR_TYPE:
+      // packet types are '0', '1', '2', '3'
+      if (incomingByte == '0') {
+        // beginning of a transaction
+        currentState = WAIT_FOR_STRLEN;
+        packetType = incomingByte - '0';
+        totalByteCount = 1; // reset everything recieved before that
+      }
+      if (incomingByte >= '1' && incomingByte <= '3') {
+        currentState = WAIT_FOR_STRLEN;
+        packetType = incomingByte - '0';
+      }
+      break;
+
+    case WAIT_FOR_STRLEN:
+      if (packetType == 0) {
+        if (incomingByte > NowWeather::maxStringLength) {
+          currentState = WAIT_FOR_TYPE;
+        }
+        else {
+          nowWeather.stringLength = incomingByte;
+          currentState = WAIT_FOR_STR;
+          bytesReceived = 0;
+        }
+      }
+      else {
+        if (incomingByte > Weather::maxStringLength) {
+          currentState = WAIT_FOR_TYPE;
+        }
+        else {
+          weather[packetType - 1].stringLength = incomingByte;
+          currentState = WAIT_FOR_STR;
+          bytesReceived = 0;
+        }
+      }
+      break;
+
+    case WAIT_FOR_STR:
+      if (packetType == 0) {
+        nowWeather.string[bytesReceived++] = incomingByte;
+        if (bytesReceived >= nowWeather.stringLength) {
+          currentState = WAIT_FOR_DATA;
+          nowWeather.string[bytesReceived] = 0;
+          bytesReceived = 0;
+        }
+      }
+      else {
+        weather[packetType - 1].string[bytesReceived++] = incomingByte;
+        if (bytesReceived >= weather[packetType - 1].stringLength) {
+          currentState = WAIT_FOR_DATA;
+          weather[packetType - 1].string[bytesReceived] = 0;
+          bytesReceived = 0;
+        }
+      }
+      break;
+
+    case WAIT_FOR_DATA:
+      if (packetType == 0) {
+        nowWeather.data[bytesReceived++] = incomingByte;
+        if (bytesReceived >= NowWeather::dataLength) {
+          currentState = WAIT_FOR_TYPE;
+          bytesReceived = 0;
+        }
+      }
+      else {
+        weather[packetType - 1].data[bytesReceived++] = incomingByte;
+        if (bytesReceived >= Weather::dataLength) {
+          currentState = WAIT_FOR_TYPE;
+          bytesReceived = 0;
+          if (packetType == 3) {
+            // end of transmission
+            Serial.print("OK ");
+            Serial.write(((totalByteCount + 62) / 63) + '0');
+            Serial.write('\n');
+            totalByteCount = 1; // reset
+          }
+        }
+      }
+      break;
+  }
+  if (totalByteCount % 63 == 0) { // totalByteCount % 63 == 0
+    Serial.print("OK ");
+    Serial.write((totalByteCount / 63) + '0');
+    Serial.write('\n');
+  }
+}
+
 void loop() {
+  while (Serial.available() > 0) {
+    processByte(Serial.read());
+  }
+
   u8g2.firstPage();
   do {
-    // Non-blocking serial read
-    while (Serial.available() > 0) {
-      byte incomingByte = Serial.read();
-      //Serial.write(incomingByte);
-
-      switch (currentState) {
-        case WAIT_FOR_TYPE:
-          //u8g2.drawStr(0, 15, "Waiting for data...");
-          packetType = incomingByte;
-          // packet types are '0', '1', '2', '3'
-          if (packetType >= '0' && packetType <= '3') {
-            currentState = WAIT_FOR_STRLEN;
-            packetType -= '0';
-          }
-          else
-            currentState = WAIT_FOR_TYPE; // unknown packet type
-          break;
-
-        case WAIT_FOR_STRLEN:
-          if (packetType == 0) {
-            if (incomingByte > NowWeather::maxStringLength) {
-              currentState = WAIT_FOR_TYPE;
-            }
-            else {
-              nowWeather.stringLength = incomingByte;
-              currentState = WAIT_FOR_STR;
-              bytesReceived = 0;
-            }
-          }
-          else {
-            weather[packetType-1].stringLength = incomingByte;
-            currentState = WAIT_FOR_STR;
-            bytesReceived = 0;
-          }
-          break;
-        case WAIT_FOR_STR:
-          if (packetType == 0) {
-            nowWeather.string[bytesReceived++] = incomingByte;
-            if (bytesReceived >= nowWeather.stringLength) {
-              currentState = WAIT_FOR_DATA;
-              nowWeather.string[bytesReceived] = 0;
-              bytesReceived = 0;
-            }
-          }
-          else {
-            weather[packetType-1].string[bytesReceived++] = incomingByte;
-            if (bytesReceived >= weather[packetType-1].stringLength) {
-              currentState = WAIT_FOR_DATA;
-              weather[packetType-1].string[bytesReceived] = 0;
-              bytesReceived = 0;
-            }
-          }
-          break;
-
-        case WAIT_FOR_DATA:
-          //Serial.write('#');
-          if (packetType == 0) {
-            nowWeather.data[bytesReceived++] = incomingByte;
-            if (bytesReceived >= NowWeather::dataLength) {
-              Serial.print("OK 0\n");
-              //u8g2.drawStr(0, 15, nowWeather.string);
-              currentState = WAIT_FOR_TYPE;
-              bytesReceived = 0;
-            }
-          }
-          else {
-            weather[packetType-1].data[bytesReceived++] = incomingByte;
-            if (bytesReceived >= Weather::dataLength) {
-              Serial.print("OK "); Serial.write(packetType + '0');
-              currentState = WAIT_FOR_TYPE;
-              bytesReceived = 0;
-            }
-          }
-          break;
-      }
-    }
-
-    //u8g2.nextPage();
-    // You can do other things here without being blocked by Serial
     u8g2.drawFrame(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight() );
-    u8g2.setCursor(1, 1);
-    u8g2.println("Current state:");
-    u8g2.println(currentState);
-
+    u8g2.setCursor(0, 0);
+    u8g2.drawStr(0, 0, nowWeather.string);
+    u8g2.drawStr(0, 15, weather[0].string);
+    u8g2.drawStr(0, 30, weather[1].string);
+    u8g2.drawStr(0, 45, weather[2].string);
+//    u8g2.println(currentState);
     // picture loop
   } while (u8g2.nextPage());
   // delay between each page
