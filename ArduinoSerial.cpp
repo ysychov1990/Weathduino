@@ -1,6 +1,5 @@
 #include <fcntl.h>
 #include <fstream>
-#include <iostream> // tbr
 #include <unistd.h>
 
 #include "ArduinoSerial.hpp"
@@ -9,11 +8,7 @@ ArduinoSerial::ArduinoSerial() : ArduinoSerial(findArduino()) {}
 
 ArduinoSerial::ArduinoSerial(std::filesystem::path p) {
   // get file descriptor
-  std::cout << "opening " << p.string() << "...\n";
   fd = open(p.c_str(), O_RDWR);
-  std::cout << "fd = " << fd << "\n";
-  std::cout << "this->fd = " << this->fd << "\n";
-
   if (fd < 0)
     throw std::runtime_error("Failed to open port!");
 
@@ -55,7 +50,6 @@ ArduinoSerial::~ArduinoSerial() {
   if (fd >= 0) {
     tcdrain(fd); // Wait for data to transmit
     close(fd);
-    std::cout << "Serial port closed safely.\n"; // tbr
   }
 }
 
