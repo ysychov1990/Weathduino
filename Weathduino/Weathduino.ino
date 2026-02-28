@@ -39,8 +39,6 @@
 #include <Wire.h>
 #include "unifont_polish2.h"
 
-//#define SERIAL_RX_BUFFER_SIZE 128 // can be changed in HardwareSerial
-
 U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
 
 struct NowWeather {
@@ -77,16 +75,6 @@ void u8g2_prepare(void) {
   u8g2.setFontDirection(0);
 }
 
-void u8g2_box_title() {
-  u8g2.drawStr( 10, 5, "U8g2");
-  u8g2.drawStr( 10, 20, "GraphicsTest");
-  u8g2.drawFrame(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight() );
-}
-
-void draw(void) {
-  u8g2_prepare();
-  u8g2_box_title();
-}
 
 State currentState = WAIT_FOR_TYPE;
 byte packetType = 0;
