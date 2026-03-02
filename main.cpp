@@ -49,7 +49,7 @@ int main() {
     CURL *curl = curl_easy_init();
     std::ostringstream ossurl; // request
     // Szczecin latitude, longiture
-    const double latitude{50.500202}, longitude{14.603476};
+    const double latitude{53.4285}, longitude{14.5528};
     const std::string hourly_params{
         "temperature_2m,apparent_temperature,precipitation,"
         "precipitation_probability,relative_humidity_2m,"
@@ -153,10 +153,12 @@ int main() {
       w.cloud = data["hourly"]["cloud_cover_mid"][counter];
       // add new element
       hourWeather[hourDate][hourNum] = w;
-//      std::cout << hourDate << "->" << hourNum << "->";
-//      std::cout << w.temp << "|" << w.tempFeel << "|" << w.humid << "|"
-//                << w.precip << "|" << w.precipProb << "|" << w.wind << "|"
-//                << w.cloud << "\n";
+      /*
+      std::cout << hourDate << "->" << hourNum << "->";
+      std::cout << w.temp << "|" << w.tempFeel << "|" << w.humid << "|"
+                << w.precip << "|" << w.precipProb << "|" << w.wind << "|"
+                << w.cloud << "\n";
+      //*/
       counter++;
     }
   }
@@ -169,7 +171,7 @@ int main() {
       outData.push_back(std::vector<unsigned char>{});
     outData.back().push_back(c);
   };
-  
+
   { // formulate our data for Arduino
     // blocks of info [max 63 bytes long]
     // current weather, today's, tomorrow's,
@@ -205,7 +207,8 @@ int main() {
       outDataPusher('0' + i);
       std::string s = std::format(std::locale("C"), "{:%Y-%m-%d}", it->first);
       outDataPusher(s.size());
-      for (auto &i : s) outDataPusher(i);
+      for (auto &i : s)
+        outDataPusher(i);
       out_char = out_char_bit = 0;
       for (auto &j : it->second) {
         auto b = j.second.to_bitset();
@@ -233,7 +236,7 @@ int main() {
     // Send 4 Packets
     for (auto &i : outData) {
       static int counter = 0;
-      std::cout << "Sending packet " << ++counter << " (" << i.size() << ") ";
+      std::cout << "Sending packet " << ++counter << " (" << i.size() << ")";
       auto written = write(arduino.getFd(), i.data(), i.size());
       if (written < 0)
         throw std::runtime_error("Error writing to serial!");
@@ -244,10 +247,12 @@ int main() {
       bool received_ok = false;
       int retry_count = 0;
 
+      usleep(100000);
       while (retry_count < 5 && !received_ok) {
         memset(read_buf, 0, sizeof(read_buf));
         int n = read(arduino.getFd(), read_buf, sizeof(read_buf) - 1);
         if (n > 0) {
+          std::cout << '.';
           response += std::string(read_buf, n);
           std::string expected = "OK " + std::to_string(counter) + "\n";
           if (response.find(expected) != std::string::npos) {
@@ -256,7 +261,8 @@ int main() {
           }
         }
         // chrono_sleep(1); // wait 0.1 s
-        usleep(500000);
+        usleep(50000);
+        std::cout.flush();
         retry_count++;
       }
 
