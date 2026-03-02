@@ -26,6 +26,7 @@ std::bitset<48> NowWeather::to_bitset() {
     if (processed_pp > 10)
       processed_pp = 10; // 3.5 bits
 
+    // wind 0__51.1 step 0.1
     uint32_t processed_w = static_cast<int>(wind * 10.);
     if (processed_w > 511)
       processed_w = 511; // 9 bits

@@ -38,33 +38,26 @@
 #include <SPI.h>
 #include <Wire.h>
 #include "unifont_polish2.h"
+#include "NowWeather.cpp"
+#include "DayWeather.cpp"
 
 U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, SCL, SDA, U8X8_PIN_NONE);
 
-struct NowWeather {
-  static const int maxStringLength = 20;
-  static const int dataLength = 6;
 
-  char stringLength;
-  char string[maxStringLength + 1];
-  char data[dataLength];
-};
 
-struct Weather {
-  static const int maxStringLength = 20;
-  static const int dataLength = 66;
-
-  char stringLength; // tbr
-  char string[maxStringLength + 1];
-  char data[dataLength];
-};
-
-enum State {
+enum SerialState {
   WAIT_FOR_TYPE,
   WAIT_FOR_STRLEN,
   WAIT_FOR_STR,
-  WAIT_FOR_DATA,
-  DISPLAY_NOWWEATHER
+  WAIT_FOR_DATA
+};
+
+enum DisplayState {
+  NOW_WEATHER_1,
+  NOW_WEATHER_2,
+  DAY1_WEATHER,
+  DAY2_WEATHER,
+  DAY3_WEATHER
 };
 
 void u8g2_prepare(void) {
@@ -75,22 +68,14 @@ void u8g2_prepare(void) {
   u8g2.setFontDirection(0);
 }
 
-
-State currentState = WAIT_FOR_TYPE;
+SerialState currentState = WAIT_FOR_TYPE;
+DisplayState displayState = DAY1_WEATHER;//NOW_WEATHER_2;
 byte packetType = 0;
 int bytesReceived = 0;
 int totalByteCount = 0;
 
-void processPacket(byte type, byte* data, int len) {
-  // Process your data here (e.g., extract bits, update display)
-
-  // Send the specific acknowledgment your C++ code expects
-  Serial.print("OK ");
-  Serial.println((char)type);
-}
-
 NowWeather nowWeather {};
-Weather weather[3] {};
+DayWeather weather[3] {};
 
 void setup(void) {
   u8g2.begin();
@@ -127,7 +112,7 @@ void processByte(byte incomingByte) {
         }
       }
       else {
-        if (incomingByte > Weather::maxStringLength) {
+        if (incomingByte > DayWeather::maxStringLength) {
           currentState = WAIT_FOR_TYPE;
         }
         else {
@@ -167,7 +152,7 @@ void processByte(byte incomingByte) {
       }
       else {
         weather[packetType - 1].data[bytesReceived++] = incomingByte;
-        if (bytesReceived >= Weather::dataLength) {
+        if (bytesReceived >= DayWeather::dataLength) {
           currentState = WAIT_FOR_TYPE;
           bytesReceived = 0;
           if (packetType == 3) {
@@ -194,14 +179,70 @@ void loop() {
   }
 
   u8g2.firstPage();
+  char buff[16];
   do {
-    u8g2.drawFrame(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight() );
-    u8g2.setCursor(0, 0);
-    u8g2.drawStr(0, 0, nowWeather.string);
-    u8g2.drawStr(0, 15, weather[0].string);
-    u8g2.drawStr(0, 30, weather[1].string);
-    u8g2.drawStr(0, 45, weather[2].string);
-//    u8g2.println(currentState);
+    switch (displayState) {
+      case NOW_WEATHER_1:
+        u8g2.drawFrame(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight() );
+
+        u8g2.drawStr(12, 0, "Teraz:");
+        nowWeather.writeTemp(buff, 8);
+        u8g2.drawStr(60, 0, buff);
+
+        u8g2.drawStr(12, 15, "Odcz.:");
+        nowWeather.writeTempFeel(buff, 8);
+        u8g2.drawStr(60, 15, buff);
+
+        u8g2.drawStr(12, 30, "Wilg.:");
+        nowWeather.writeHumid(buff, 5);
+        u8g2.drawStr(60, 30, buff);
+
+        u8g2.drawStr(12, 45, "Wiatr:");
+        nowWeather.writeWind(buff, 8);
+        u8g2.drawStr(60, 45, buff);
+        break;
+
+      case NOW_WEATHER_2:
+        u8g2.drawFrame(0, 0, u8g2.getDisplayWidth(), u8g2.getDisplayHeight() );
+
+        u8g2.drawStr(12, 15, "Opady:");
+        nowWeather.writePrecip(buff, 7);
+        u8g2.drawStr(60, 8, buff);
+
+        //u8g2.drawStr(12, 23, "Opady:");
+        nowWeather.writePrecipProb(buff, 7);
+        u8g2.drawStr(60, 23, buff);
+
+        u8g2.drawStr(12, 38, "Chmury:");
+        nowWeather.writeCloud(buff, 5);
+        u8g2.drawStr(68, 38, buff);
+        break;
+
+      case DAY1_WEATHER:
+        u8g2.drawStr(0, 0, "Temp. dzisiaj:");
+
+        float arr[24], minv = 100., maxv = -100., difv;
+        for (int i = 0; i < 24; i++) {
+          arr[i] = weather[0].getTemp(i);
+          if (arr[i] < minv) minv = arr[i];
+          if (arr[i] > maxv) maxv = arr[i];
+        }
+        float lastPos = arr[0];
+        difv = maxv - minv;
+        if (difv == 0) difv = 0.01;
+        for (int i = 0; i < 24; i++) {
+          u8g2.drawLine(i * 5, 48 - 32 * (lastPos - minv) / difv , (i+1) * 5, 48 - 32 * (arr[i] - minv) / difv);
+          lastPos = arr[i];
+        }
+        u8g2.drawStr(0, 50, "Min");
+        u8g2.setCursor(28, 50);
+        u8g2.print(int(minv));
+        u8g2.drawStr(64, 50, "Max");
+        u8g2.setCursor(92, 50);
+        u8g2.print(int(maxv));
+        break;
+    }
+    //    u8g2.println(currentState);
     // picture loop
   } while (u8g2.nextPage());
   // delay between each page
